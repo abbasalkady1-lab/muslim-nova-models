@@ -1,0 +1,96 @@
+name: Release recitation model
+
+# Converts tarteel-ai/whisper-base-ar-quran (Apache-2.0) to sherpa-onnx's
+# int8 Whisper format, checks it on real recitations, and publishes it as a
+# release. The app downloads these files on demand and checks each SHA-256
+# against values pinned in its code.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        default: whisper-base-ar-quran-v1
+
+permissions:
+  contents: write
+
+env:
+  HF_MODEL: tarteel-ai/whisper-base-ar-quran
+  # The exact model revision this release is built from.
+  HF_REVISION: 5c3c53fdf9272c4f6ee0bee09a1e5a4a615ee25c
+  # Must match the sherpa_onnx Dart package the app uses.
+  SHERPA_VERSION: 2.0.1
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned tools
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0
+          pip install openai-whisper==20250625 transformers==5.21.0 \
+            onnx==1.23.2 onnxruntime==1.31.1 sherpa-onnx==${SHERPA_VERSION} \
+            huggingface-hub==2.3.0 numpy
+          sudo apt-get install -y -q ffmpeg
+      - name: Download the model at its pinned revision
+        run: |
+          python -c "
+          from huggingface_hub import snapshot_download
+          snapshot_download('${HF_MODEL}', revision='${HF_REVISION}', local_dir='hf',
+                            allow_patterns=['*.json', '*.txt', 'pytorch_model.bin'])"
+      - name: Convert to openai-whisper format (checked against the original)
+        run: python scripts/convert_hf_to_openai.py hf tarteel.pt
+      - name: Export with sherpa-onnx's own exporter
+        run: |
+          curl -fsSL -o export-onnx.py \
+            "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v${SHERPA_VERSION}/scripts/whisper/export-onnx.py"
+          python scripts/export_onnx.py export-onnx.py tarteel.pt
+          mkdir out
+          mv base-encoder.int8.onnx out/encoder.int8.onnx
+          mv base-decoder.int8.onnx out/decoder.int8.onnx
+          mv base-tokens.txt out/tokens.txt
+          curl -fsSL -o out/silero_vad.onnx \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+          cp LICENSE NOTICE.md out/
+      - name: Recognise known recitations
+        run: |
+          mkdir wav
+          for a in 001001 001002 002002 112001; do
+            curl -fsSL -o "wav/$a.mp3" "https://everyayah.com/data/Husary_64kbps/$a.mp3"
+            ffmpeg -loglevel error -i "wav/$a.mp3" -ar 16000 -ac 1 "wav/$a.wav"
+          done
+          python scripts/smoke_test.py out wav | tee results.md
+      - name: Manifest with sizes and SHA-256
+        run: |
+          cd out
+          python - <<'EOF'
+          import hashlib, json, os
+          files = {f: {"bytes": os.path.getsize(f),
+                       "sha256": hashlib.sha256(open(f, "rb").read()).hexdigest()}
+                   for f in sorted(os.listdir("."))}
+          json.dump({"source": os.environ["HF_MODEL"],
+                     "revision": os.environ["HF_REVISION"],
+                     "sherpa_onnx": os.environ["SHERPA_VERSION"],
+                     "files": files}, open("manifest.json", "w"), indent=2)
+          print(json.dumps(files, indent=2))
+          EOF
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Whisper base fine-tuned on Quran recitation by Tarteel (${HF_MODEL} at ${HF_REVISION}), Apache-2.0,"
+            echo "exported to int8 ONNX for sherpa-onnx ${SHERPA_VERSION}, with the Silero VAD model (MIT)."
+            echo
+            echo "## Check on Husary recitations (everyayah.com)"
+            cat results.md
+            echo
+            echo '```json'
+            cat out/manifest.json
+            echo '```'
+          } > notes.md
+          gh release create "${{ inputs.tag }}" out/* --title "${{ inputs.tag }}" --notes-file notes.md
