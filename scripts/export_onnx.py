@@ -20,7 +20,12 @@ spec.loader.exec_module(exporter)
 exporter.load_model = lambda name: whisper.load_model(checkpoint, device="cpu")
 sys.argv = [script, "--model", "base"]
 
-from whisper.model import disable_sdpa  # noqa: E402  (as the exporter does)
+# Newer openai-whisper must not use SDPA while exporting (as the exporter's
+# own entry point does); the version sherpa-onnx exports with has none.
+try:
+    from whisper.model import disable_sdpa
+except ImportError:
+    from contextlib import nullcontext as disable_sdpa
 
 with disable_sdpa():
     exporter.main()

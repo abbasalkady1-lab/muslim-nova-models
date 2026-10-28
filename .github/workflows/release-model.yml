@@ -48,7 +48,7 @@ jobs:
         run: |
           curl -fsSL -o export-onnx.py \
             "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v${SHERPA_VERSION}/scripts/whisper/export-onnx.py"
-          python scripts/export_onnx.py export-onnx.py tarteel.pt
+          /tmp/export/bin/python scripts/export_onnx.py export-onnx.py tarteel.pt
           mkdir out
           mv base-encoder.int8.onnx out/encoder.int8.onnx
           mv base-decoder.int8.onnx out/decoder.int8.onnx
