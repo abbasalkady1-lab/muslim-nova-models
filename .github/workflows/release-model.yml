@@ -23,18 +23,27 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # 22.04 still offers Python 3.8, which sherpa-onnx's exporter runs on.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
-      - name: Install pinned tools
+          python-version: '3.8'
+      - name: Install the exporter's tools (as sherpa-onnx's own export job)
         run: |
-          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0
-          pip install openai-whisper==20250625 transformers==5.21.0 \
-            onnx==1.23.2 onnxruntime==1.31.1 sherpa-onnx==${SHERPA_VERSION} \
-            huggingface-hub==2.3.0 numpy
+          python -m venv /tmp/export
+          /tmp/export/bin/pip install -q torch==1.13.0 -f https://download.pytorch.org/whl/cpu/torch_stable.html
+          /tmp/export/bin/pip install -q openai-whisper==20231117 onnx==1.14.1 \
+            onnxruntime==1.16.3 "numpy<1.25"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install conversion and test tools
+        run: |
+          pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.15.0
+          pip install -q openai-whisper==20250625 transformers==5.21.0 \
+            sherpa-onnx==${SHERPA_VERSION} huggingface-hub==2.3.0 numpy
           sudo apt-get install -y -q ffmpeg
       - name: Download the model at its pinned revision
         run: |
